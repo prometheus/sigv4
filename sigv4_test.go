@@ -115,3 +115,69 @@ func TestSigV4RoundTripper(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
+
+func TestSigV4RoundTripperWithService(t *testing.T) {
+	var gotReq *http.Request
+
+	rt := &sigV4RoundTripper{
+		region:  "us-east-2",
+		service: "execute-api",
+		next: RoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			gotReq = req
+			return &http.Response{StatusCode: http.StatusOK}, nil
+		}),
+		signer: signer.NewSigner(credentials.NewStaticCredentials(
+			"test-id",
+			"secret",
+			"token",
+		)),
+	}
+	rt.pool.New = rt.newBuf
+
+	cli := &http.Client{Transport: rt}
+
+	req, err := http.NewRequest(http.MethodPost, "https://example.com", strings.NewReader("Hello, world!"))
+	require.NoError(t, err)
+
+	_, err = cli.Do(req)
+	require.NoError(t, err)
+	require.NotNil(t, gotReq)
+
+	origReq := gotReq
+	require.NotEmpty(t, origReq.Header.Get("Authorization"))
+	require.NotEmpty(t, origReq.Header.Get("X-Amz-Date"))
+
+	// Perform the same request but with a header that shouldn't included in the
+	// signature; validate that the Authorization signature matches.
+	t.Run("Ignored Headers", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodPost, "https://example.com", strings.NewReader("Hello, world!"))
+		require.NoError(t, err)
+
+		req.Header.Add("Uber-Trace-Id", "some-trace-id")
+
+		_, err = cli.Do(req)
+		require.NoError(t, err)
+		require.NotNil(t, gotReq)
+
+		require.Equal(t, origReq.Header.Get("Authorization"), gotReq.Header.Get("Authorization"))
+	})
+
+	t.Run("Escape URL", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodPost, "https://example.com/test//test", strings.NewReader("Hello, world!"))
+		require.NoError(t, err)
+		require.Equal(t, "/test//test", req.URL.Path)
+
+		_, err = cli.Do(req)
+		require.NoError(t, err)
+		require.NotNil(t, gotReq)
+
+		require.Equal(t, "/test/test", gotReq.URL.Path)
+	})
+
+	t.Run("No body", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet, "https://example.com/test/test", nil)
+		require.NoError(t, err)
+		_, err = cli.Do(req)
+		require.NoError(t, err)
+	})
+}

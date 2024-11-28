@@ -1,6 +1,7 @@
 region: us-east-2
 access_key: AccessKey
 secret_key: SecretKey
+service: execute-api
 profile: profile
 role_arn: blah:role/arn
 use_fips_sts_endpoint: true
