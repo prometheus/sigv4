@@ -15,21 +15,22 @@ package sigv4
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
-	"net/textproto"
 	"path"
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/endpoints"
-
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
-	"github.com/aws/aws-sdk-go/aws/session"
-	signer "github.com/aws/aws-sdk-go/aws/signer/v4"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	signer "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
 var sigv4HeaderDenylist = []string{
@@ -40,9 +41,12 @@ type sigV4RoundTripper struct {
 	region string
 	next   http.RoundTripper
 	pool   sync.Pool
+	creds  *aws.CredentialsCache
 
 	signer *signer.Signer
 }
+
+var ctx context.Context = context.TODO()
 
 // NewSigV4RoundTripper returns a new http.RoundTripper that will sign requests
 // using Amazon's Signature Verification V4 signing procedure. The request will
@@ -56,43 +60,50 @@ func NewSigV4RoundTripper(cfg *SigV4Config, next http.RoundTripper) (http.RoundT
 		next = http.DefaultTransport
 	}
 
-	creds := credentials.NewStaticCredentials(cfg.AccessKey, string(cfg.SecretKey), "")
-	if cfg.AccessKey == "" && cfg.SecretKey == "" {
-		creds = nil
+	awsConfig := []func(*config.LoadOptions) error{}
+
+	if cfg.AccessKey != "" && cfg.SecretKey != "" {
+		awsConfig = append(awsConfig, config.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider(cfg.AccessKey, string(cfg.SecretKey), ""),
+		))
 	}
 
-	useFIPSSTSEndpoint := endpoints.FIPSEndpointStateDisabled
 	if cfg.UseFIPSSTSEndpoint {
-		useFIPSSTSEndpoint = endpoints.FIPSEndpointStateEnabled
+		awsConfig = append(awsConfig, config.WithUseFIPSEndpoint(aws.FIPSEndpointStateEnabled))
+	} else {
+		awsConfig = append(awsConfig, config.WithUseFIPSEndpoint(aws.FIPSEndpointStateDisabled))
 	}
 
-	sess, err := session.NewSessionWithOptions(session.Options{
-		Config: aws.Config{
-			Region:          aws.String(cfg.Region),
-			Credentials:     creds,
-			UseFIPSEndpoint: useFIPSSTSEndpoint,
-		},
-		Profile: cfg.Profile,
-	})
+	if cfg.Region != "" {
+		awsConfig = append(awsConfig, config.WithRegion(cfg.Region))
+	}
+
+	if cfg.Profile != "" {
+		awsConfig = append(awsConfig, config.WithSharedConfigProfile(cfg.Profile))
+	}
+
+	awscfg, err := config.LoadDefaultConfig(
+		ctx,
+		awsConfig...,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("could not create new AWS session: %w", err)
 	}
-	if _, err := sess.Config.Credentials.Get(); err != nil {
+	if _, err := awscfg.Credentials.Retrieve(ctx); err != nil {
 		return nil, fmt.Errorf("could not get SigV4 credentials: %w", err)
 	}
-	if aws.StringValue(sess.Config.Region) == "" {
+	if awscfg.Region == "" {
 		return nil, fmt.Errorf("region not configured in sigv4 or in default credentials chain")
 	}
 
-	signerCreds := sess.Config.Credentials
 	if cfg.RoleARN != "" {
-		signerCreds = stscreds.NewCredentials(sess, cfg.RoleARN)
+		awscfg.Credentials = aws.NewCredentialsCache(stscreds.NewAssumeRoleProvider(sts.NewFromConfig(awscfg), cfg.RoleARN))
 	}
 
 	rt := &sigV4RoundTripper{
 		region: cfg.Region,
 		next:   next,
-		signer: signer.NewSigner(signerCreds),
+		creds:  aws.NewCredentialsCache(awscfg.Credentials),
 	}
 	rt.pool.New = rt.newBuf
 	return rt, nil
@@ -103,29 +114,30 @@ func (rt *sigV4RoundTripper) newBuf() interface{} {
 }
 
 func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	// rt.signer.Sign needs a seekable body, so we replace the body with a
-	// buffered reader filled with the contents of original body.
-	buf := rt.pool.Get().(*bytes.Buffer)
-	defer func() {
-		buf.Reset()
-		rt.pool.Put(buf)
-	}()
+	// // rt.signer.Sign needs a seekable body, so we replace the body with a
+	// // buffered reader filled with the contents of original body.
+	// buf := rt.pool.Get().(*bytes.Buffer)
+	// defer func() {
+	// 	buf.Reset()
+	// 	rt.pool.Put(buf)
+	// }()
 
-	if req.Body != nil {
-		if _, err := io.Copy(buf, req.Body); err != nil {
-			return nil, err
-		}
-		// Close the original body since we don't need it anymore.
-		_ = req.Body.Close()
-	}
+	// if req.Body != nil {
+	// 	if _, err := io.Copy(buf, req.Body); err != nil {
+	// 		return nil, err
+	// 	}
+	// 	// Close the original body since we don't need it anymore.
+	// 	_ = req.Body.Close()
+	// }
 
-	// Ensure our seeker is back at the start of the buffer once we return.
-	var seeker io.ReadSeeker = bytes.NewReader(buf.Bytes())
-	defer func() {
-		_, _ = seeker.Seek(0, io.SeekStart)
-	}()
-	req.Body = io.NopCloser(seeker)
+	// // Ensure our seeker is back at the start of the buffer once we return.
+	// var seeker io.ReadSeeker = bytes.NewReader(buf.Bytes())
+	// defer func() {
+	// 	_, _ = seeker.Seek(0, io.SeekStart)
+	// }()
+	// req.Body = io.NopCloser(seeker)
 
+	defer req.Body.Close()
 	// Clean path like documented in AWS documentation.
 	// https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
 	req.URL.Path = path.Clean(req.URL.Path)
@@ -135,18 +147,39 @@ func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	for _, header := range sigv4HeaderDenylist {
 		signReq.Header.Del(header)
 	}
+	creds, err := rt.creds.Retrieve(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving credentials: %w", err)
+	}
 
-	headers, err := rt.signer.Sign(signReq, seeker, "aps", rt.region, time.Now().UTC())
+	bodyBytes, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read request body: %w", err)
+	}
+
+	hash := sha256.Sum256(bodyBytes)
+	strHash := hex.EncodeToString(hash[:])
+	err = rt.signer.SignHTTP(
+		ctx,
+		creds,
+		signReq,
+		strHash,
+		"aps",
+		rt.region,
+		time.Now().UTC(),
+	)
+
+	// headers, err := rt.signer.Sign(signReq, seeker, "aps", rt.region, time.Now().UTC())
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign request: %w", err)
 	}
 
-	// Copy over signed headers. Authorization header is not returned by
-	// rt.signer.Sign and needs to be copied separately.
-	for k, v := range headers {
-		req.Header[textproto.CanonicalMIMEHeaderKey(k)] = v
-	}
-	req.Header.Set("Authorization", signReq.Header.Get("Authorization"))
+	// // Copy over signed headers. Authorization header is not returned by
+	// // rt.signer.Sign and needs to be copied separately.
+	// for k, v := range headers {
+	// 	req.Header[textproto.CanonicalMIMEHeaderKey(k)] = v
+	// }
+	// req.Header.Set("Authorization", signReq.Header.Get("Authorization"))
 
 	return rt.next.RoundTrip(req)
 }
