@@ -89,9 +89,11 @@ func NewSigV4RoundTripper(cfg *SigV4Config, next http.RoundTripper) (http.RoundT
 	if err != nil {
 		return nil, fmt.Errorf("could not create new AWS session: %w", err)
 	}
+
 	if _, err := awscfg.Credentials.Retrieve(ctx); err != nil {
 		return nil, fmt.Errorf("could not get SigV4 credentials: %w", err)
 	}
+
 	if awscfg.Region == "" {
 		return nil, fmt.Errorf("region not configured in sigv4 or in default credentials chain")
 	}
@@ -104,6 +106,7 @@ func NewSigV4RoundTripper(cfg *SigV4Config, next http.RoundTripper) (http.RoundT
 		region: cfg.Region,
 		next:   next,
 		creds:  aws.NewCredentialsCache(awscfg.Credentials),
+		signer: signer.NewSigner(),
 	}
 	rt.pool.New = rt.newBuf
 	return rt, nil
