@@ -49,7 +49,7 @@ func TestSigV4_Inferred_Region(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotNil(t, awscfg.Region)
-	require.Equal(t, "us-west-2", *&awscfg.Region)
+	require.Equal(t, "us-west-2", awscfg.Region)
 }
 
 func TestSigV4RoundTripper(t *testing.T) {

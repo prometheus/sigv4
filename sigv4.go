@@ -152,8 +152,6 @@ func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		rt.region,
 		time.Now().UTC(),
 	)
-
-	// headers, err := rt.signer.Sign(signReq, seeker, "aps", rt.region, time.Now().UTC())
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign request: %w", err)
 	}
