@@ -55,15 +55,6 @@ func TestSigV4_Inferred_Region(t *testing.T) {
 func TestSigV4RoundTripper(t *testing.T) {
 	var gotReq *http.Request
 
-	// rt, _ := NewSigV4RoundTripper(
-	// 	&SigV4Config{
-	// 		Region: "us-east-2",
-	// 	},
-	// 	RoundTripperFunc(func(req *http.Request) (*http.Response, error) {
-	// 		gotReq = req
-	// 		return &http.Response{StatusCode: http.StatusOK}, nil
-	// 	}),
-	// )
 	awscfg, _ := config.LoadDefaultConfig(
 		ctx,
 		config.WithCredentialsProvider(
