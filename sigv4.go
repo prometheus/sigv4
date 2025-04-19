@@ -39,12 +39,12 @@ var sigv4HeaderDenylist = []string{
 }
 
 type sigV4RoundTripper struct {
-	region string
-	next   http.RoundTripper
-	pool   sync.Pool
-	creds  *aws.CredentialsCache
-
-	signer *signer.Signer
+	region      string
+	next        http.RoundTripper
+	pool        sync.Pool
+	creds       *aws.CredentialsCache
+	serviceName string
+	signer      *signer.Signer
 }
 
 var ctx context.Context = context.TODO()
@@ -103,11 +103,18 @@ func NewSigV4RoundTripper(cfg *SigV4Config, next http.RoundTripper) (http.RoundT
 		awscfg.Credentials = aws.NewCredentialsCache(stscreds.NewAssumeRoleProvider(sts.NewFromConfig(awscfg), cfg.RoleARN), credentialCacheOptions)
 	}
 
+	serviceName := "aps"
+
+	if cfg.ServiceName != "" {
+		serviceName = cfg.ServiceName
+	}
+
 	rt := &sigV4RoundTripper{
-		region: cfg.Region,
-		next:   next,
-		creds:  aws.NewCredentialsCache(awscfg.Credentials, credentialCacheOptions),
-		signer: signer.NewSigner(),
+		region:      cfg.Region,
+		next:        next,
+		creds:       aws.NewCredentialsCache(awscfg.Credentials, credentialCacheOptions),
+		signer:      signer.NewSigner(),
+		serviceName: serviceName,
 	}
 	rt.pool.New = rt.newBuf
 	return rt, nil
@@ -148,7 +155,7 @@ func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		creds,
 		signReq,
 		strHash,
-		"aps",
+		rt.serviceName,
 		rt.region,
 		time.Now().UTC(),
 	)
