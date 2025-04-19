@@ -100,13 +100,13 @@ func NewSigV4RoundTripper(cfg *SigV4Config, next http.RoundTripper) (http.RoundT
 	}
 
 	if cfg.RoleARN != "" {
-		awscfg.Credentials = aws.NewCredentialsCache(stscreds.NewAssumeRoleProvider(sts.NewFromConfig(awscfg), cfg.RoleARN))
+		awscfg.Credentials = aws.NewCredentialsCache(stscreds.NewAssumeRoleProvider(sts.NewFromConfig(awscfg), cfg.RoleARN), credentialCacheOptions)
 	}
 
 	rt := &sigV4RoundTripper{
 		region: cfg.Region,
 		next:   next,
-		creds:  aws.NewCredentialsCache(awscfg.Credentials),
+		creds:  aws.NewCredentialsCache(awscfg.Credentials, credentialCacheOptions),
 		signer: signer.NewSigner(),
 	}
 	rt.pool.New = rt.newBuf
@@ -164,4 +164,9 @@ func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	req.Header.Set("Authorization", signReq.Header.Get("Authorization"))
 
 	return rt.next.RoundTrip(req)
+}
+
+func credentialCacheOptions(options *aws.CredentialsCacheOptions) {
+	options.ExpiryWindow = 30 * time.Second
+	options.ExpiryWindowJitterFrac = 0.5
 }
