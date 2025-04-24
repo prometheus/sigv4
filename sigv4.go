@@ -125,13 +125,17 @@ func (rt *sigV4RoundTripper) newBuf() interface{} {
 }
 
 func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	var bodyBytes []byte
-	var err error
+	buf := rt.pool.Get().(*bytes.Buffer)
+
+	defer func() {
+		buf.Reset()
+		rt.pool.Put(buf)
+	}()
+
 	if req.Body != nil {
 		defer req.Body.Close()
-		bodyBytes, err = io.ReadAll(req.Body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read request body: %w", err)
+		if _, err := io.Copy(buf, req.Body); err != nil {
+			return nil, err
 		}
 	}
 	// Clean path like documented in AWS documentation.
@@ -148,7 +152,7 @@ func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		return nil, fmt.Errorf("error retrieving credentials: %w", err)
 	}
 
-	hash := sha256.Sum256(bodyBytes)
+	hash := sha256.Sum256(buf.Bytes())
 	strHash := hex.EncodeToString(hash[:])
 	err = rt.signer.SignHTTP(
 		ctx,
