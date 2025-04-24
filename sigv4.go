@@ -127,6 +127,11 @@ func (rt *sigV4RoundTripper) newBuf() interface{} {
 func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	buf := rt.pool.Get().(*bytes.Buffer)
 
+	defer func() {
+		buf.Reset()
+		rt.pool.Put(buf)
+	}()
+
 	if req.Body != nil {
 		defer req.Body.Close()
 		if _, err := io.Copy(buf, req.Body); err != nil {
