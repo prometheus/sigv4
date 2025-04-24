@@ -22,7 +22,7 @@ import (
 // SigV4Config is the configuration for signing remote write requests with
 // AWS's SigV4 verification process. Empty values will be retrieved using the
 // AWS default credentials chain.
-type SigV4Config struct {
+type SigV4Config struct { //nolint:revive
 	Region             string        `yaml:"region,omitempty"`
 	AccessKey          string        `yaml:"access_key,omitempty"`
 	SecretKey          config.Secret `yaml:"secret_key,omitempty"`
