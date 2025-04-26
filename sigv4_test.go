@@ -14,6 +14,7 @@
 package sigv4
 
 import (
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -93,6 +94,10 @@ func TestSigV4RoundTripper(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, gotReq)
 
+		data, err := io.ReadAll(gotReq.Body)
+		require.NoError(t, err)
+		require.Equal(t, "Hello, world!", string(data))
+
 		require.Equal(t, origReq.Header.Get("Authorization"), gotReq.Header.Get("Authorization"))
 	})
 
@@ -105,6 +110,10 @@ func TestSigV4RoundTripper(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, gotReq)
 
+		data, err := io.ReadAll(gotReq.Body)
+		require.NoError(t, err)
+		require.Equal(t, "Hello, world!", string(data))
+
 		require.Equal(t, "/test/test", gotReq.URL.Path)
 	})
 
@@ -112,6 +121,7 @@ func TestSigV4RoundTripper(t *testing.T) {
 		req, err := http.NewRequest(http.MethodGet, "https://example.com/test/test", nil)
 		require.NoError(t, err)
 		_, err = cli.Do(req)
+		require.Nil(t, req.Body)
 		require.NoError(t, err)
 	})
 }
