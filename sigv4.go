@@ -120,11 +120,16 @@ func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	}
 
 	// Ensure our seeker is back at the start of the buffer once we return.
-	var seeker io.ReadSeeker = bytes.NewReader(buf.Bytes())
-	defer func() {
-		_, _ = seeker.Seek(0, io.SeekStart)
-	}()
-	req.Body = io.NopCloser(seeker)
+	// Empty body is a valid situation
+	var seeker io.ReadSeeker = nil
+	if req.Body != nil {
+		seeker = bytes.NewReader(buf.Bytes())
+		bytes.NewReader(buf.Bytes())
+		defer func() {
+			_, _ = seeker.Seek(0, io.SeekStart)
+		}()
+		req.Body = io.NopCloser(seeker)
+	}
 
 	// Clean path like documented in AWS documentation.
 	// https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
