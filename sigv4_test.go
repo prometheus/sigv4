@@ -15,6 +15,7 @@ package sigv4
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -96,6 +97,10 @@ func TestSigV4RoundTripper(t *testing.T) {
 		_, err = cli.Do(req)
 		require.NoError(t, err)
 		require.NotNil(t, gotReq)
+		// Validate that the transport is able to consume the body
+		data, err := io.ReadAll(gotReq.Body)
+		require.NoError(t, err)
+		require.Equal(t, "Hello, world!", string(data))
 
 		require.Equal(t, origReq.Header.Get("Authorization"), gotReq.Header.Get("Authorization"))
 	})
