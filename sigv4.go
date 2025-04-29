@@ -133,11 +133,23 @@ func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	}()
 
 	if req.Body != nil {
-		defer req.Body.Close()
 		if _, err := io.Copy(buf, req.Body); err != nil {
 			return nil, err
 		}
+		// Close the original body since we don't need it anymore.
+		_ = req.Body.Close()
 	}
+
+	// Ensure our seeker is back at the start of the buffer once we return.
+	// Empty body is a valid situation
+	if req.Body != nil {
+		seeker := bytes.NewReader(buf.Bytes())
+		defer func() {
+			_, _ = seeker.Seek(0, io.SeekStart)
+		}()
+		req.Body = io.NopCloser(seeker)
+	}
+
 	// Clean path like documented in AWS documentation.
 	// https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
 	req.URL.Path = path.Clean(req.URL.Path)
@@ -151,7 +163,6 @@ func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving credentials: %w", err)
 	}
-
 	hash := sha256.Sum256(buf.Bytes())
 	strHash := hex.EncodeToString(hash[:])
 	err = rt.signer.SignHTTP(
