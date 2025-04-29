@@ -179,7 +179,7 @@ func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 
 	// Set unsigned headers into the new req
 	for _, header := range sigv4HeaderDenylist {
-		headerValue := signReq.Header.Get(header)
+		headerValue := req.Header.Get(header)
 		if headerValue != "" {
 			signReq.Header.Set(header, headerValue)
 		}
