@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/textproto"
 	"path"
 	"sync"
 	"time"
@@ -178,14 +177,15 @@ func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		return nil, fmt.Errorf("failed to sign request: %w", err)
 	}
 
-	// Copy over signed headers. Authorization header is not returned by
-	// rt.signer.Sign and needs to be copied separately.
-	for k, v := range signReq.Header {
-		req.Header[textproto.CanonicalMIMEHeaderKey(k)] = v
+	// Set unsigned headers into the new req
+	for _, header := range sigv4HeaderDenylist {
+		headerValue := signReq.Header.Get(header)
+		if headerValue != "" {
+			signReq.Header.Set(header, headerValue)
+		}
 	}
-	req.Header.Set("Authorization", signReq.Header.Get("Authorization"))
 
-	return rt.next.RoundTrip(req)
+	return rt.next.RoundTrip(signReq)
 }
 
 func credentialCacheOptions(options *aws.CredentialsCacheOptions) {
