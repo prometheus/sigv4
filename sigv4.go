@@ -126,6 +126,8 @@ func (rt *sigV4RoundTripper) newBuf() interface{} {
 func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	buf := rt.pool.Get().(*bytes.Buffer)
 
+	strHash := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
 	defer func() {
 		buf.Reset()
 		rt.pool.Put(buf)
@@ -137,16 +139,17 @@ func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		}
 		// Close the original body since we don't need it anymore.
 		_ = req.Body.Close()
-	}
 
-	// Ensure our seeker is back at the start of the buffer once we return.
-	// Empty body is a valid situation
-	if req.Body != nil {
+		// Ensure our seeker is back at the start of the buffer once we return.
+		// Empty body is a valid situation
 		seeker := bytes.NewReader(buf.Bytes())
 		defer func() {
 			_, _ = seeker.Seek(0, io.SeekStart)
 		}()
+
 		req.Body = io.NopCloser(seeker)
+		hash := sha256.Sum256(buf.Bytes())
+		strHash = hex.EncodeToString(hash[:])
 	}
 
 	// Clean path like documented in AWS documentation.
@@ -162,8 +165,7 @@ func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving credentials: %w", err)
 	}
-	hash := sha256.Sum256(buf.Bytes())
-	strHash := hex.EncodeToString(hash[:])
+
 	err = rt.signer.SignHTTP(
 		ctx,
 		creds,
