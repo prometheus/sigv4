@@ -113,7 +113,9 @@ func TestSigV4RoundTripper(t *testing.T) {
 		_, err = cli.Do(req)
 		require.NoError(t, err)
 		require.NotNil(t, gotReq)
-
+		// Validate that the transport is able to consume the body
+		_, err = io.ReadAll(gotReq.Body)
+		require.NoError(t, err)
 		require.Equal(t, "/test/test", gotReq.URL.Path)
 	})
 
@@ -121,6 +123,7 @@ func TestSigV4RoundTripper(t *testing.T) {
 		req, err := http.NewRequest(http.MethodGet, "https://example.com/test/test", nil)
 		require.NoError(t, err)
 		_, err = cli.Do(req)
+		require.Nil(t, req.Body)
 		require.NoError(t, err)
 	})
 }
