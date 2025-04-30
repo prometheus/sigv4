@@ -99,7 +99,7 @@ func NewSigV4RoundTripper(cfg *SigV4Config, next http.RoundTripper) (http.RoundT
 	}
 
 	if cfg.RoleARN != "" {
-		awscfg.Credentials = aws.NewCredentialsCache(stscreds.NewAssumeRoleProvider(sts.NewFromConfig(awscfg), cfg.RoleARN), credentialCacheOptions)
+		awscfg.Credentials = stscreds.NewAssumeRoleProvider(sts.NewFromConfig(awscfg), cfg.RoleARN)
 	}
 
 	serviceName := "aps"
