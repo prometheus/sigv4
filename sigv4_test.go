@@ -33,6 +33,22 @@ func (rt RoundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return rt(r)
 }
 
+// trackingProvider wraps a credentials.Provider and tracks how many times Retrieve() is called.
+// This helps us determine that after Expire() a refresh (via Get) is triggered.
+type trackingProvider struct {
+	provider credentials.Provider
+	count    int
+}
+
+func (tp *trackingProvider) Retrieve() (credentials.Value, error) {
+	tp.count++
+	return tp.provider.Retrieve()
+}
+
+func (tp *trackingProvider) IsExpired() bool {
+	return tp.provider.IsExpired()
+}
+
 func TestSigV4_Inferred_Region(t *testing.T) {
 	os.Setenv("AWS_ACCESS_KEY_ID", "secret")
 	os.Setenv("AWS_SECRET_ACCESS_KEY", "token")
@@ -113,5 +129,74 @@ func TestSigV4RoundTripper(t *testing.T) {
 		require.NoError(t, err)
 		_, err = cli.Do(req)
 		require.NoError(t, err)
+	})
+
+	t.Run("Expired Token", func(t *testing.T) {
+		t.Run("Successful retry", func(t *testing.T) {
+			// Setup tracking credentials to verify that after Expire()
+			// a refresh is triggered by observing an extra call to Retrieve().
+			// Note: The first signing call will trigger a Retrieve() so we expect count >= 2.
+			// For example, if count == 1 then no refresh happened after Expire().
+			tp := &trackingProvider{provider: &credentials.StaticProvider{
+				Value: credentials.Value{
+					AccessKeyID:     "test-id",
+					SecretAccessKey: "secret",
+					SessionToken:    "token",
+				},
+			}}
+			trackingCreds := credentials.NewCredentials(tp)
+			rt.signer.Credentials = trackingCreds
+
+			callCount := 0
+			originalNext := rt.next
+			defer func() { rt.next = originalNext }()
+
+			rt.next = RoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				callCount++
+				if callCount == 1 {
+					return &http.Response{
+						StatusCode: http.StatusForbidden,
+						Header: http.Header{
+							"X-Amzn-Errortype": []string{"ExpiredTokenException"},
+						},
+					}, nil
+				}
+				return &http.Response{StatusCode: http.StatusOK}, nil
+			})
+
+			req, err := http.NewRequest(http.MethodPost, "https://example.com", strings.NewReader("Hello, world!"))
+			require.NoError(t, err)
+
+			resp, err := cli.Do(req)
+			require.NoError(t, err)
+
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			require.Greater(t, tp.count, 1, "Expected credentials retrieval to be triggered at least twice (initial retrieval and after Expire())")
+		})
+
+		t.Run("Different 403 error does not retry", func(t *testing.T) {
+			callCount := 0
+			originalNext := rt.next
+			defer func() { rt.next = originalNext }()
+
+			rt.next = RoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				callCount++
+				return &http.Response{
+					StatusCode: http.StatusForbidden,
+					Header: http.Header{
+						"X-Amzn-Errortype": []string{"SomeOtherError"},
+					},
+				}, nil
+			})
+
+			req, err := http.NewRequest(http.MethodPost, "https://example.com", strings.NewReader("Hello, world!"))
+			require.NoError(t, err)
+
+			resp, err := cli.Do(req)
+			require.NoError(t, err)
+			require.Equal(t, http.StatusForbidden, resp.StatusCode)
+
+			require.Equal(t, 1, callCount, "Expected only one HTTP call")
+		})
 	})
 }

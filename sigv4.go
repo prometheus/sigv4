@@ -102,6 +102,25 @@ func (rt *sigV4RoundTripper) newBuf() interface{} {
 	return bytes.NewBuffer(make([]byte, 0, 1024))
 }
 
+func (rt *sigV4RoundTripper) signRequest(req *http.Request, signReq *http.Request, seeker io.ReadSeeker) error {
+	_, _ = seeker.Seek(0, io.SeekStart)
+
+	headers, err := rt.signer.Sign(signReq, seeker, "aps", rt.region, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("failed to sign request: %w", err)
+	}
+
+	// Copy over signed headers. Authorization header is not returned by
+	// rt.signer.Sign and needs to be copied separately.
+	for k, v := range headers {
+		req.Header[textproto.CanonicalMIMEHeaderKey(k)] = v
+	}
+	req.Header.Set("Authorization", signReq.Header.Get("Authorization"))
+
+	_, _ = seeker.Seek(0, io.SeekStart)
+	return nil
+}
+
 func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	// rt.signer.Sign needs a seekable body, so we replace the body with a
 	// buffered reader filled with the contents of original body.
@@ -136,17 +155,23 @@ func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		signReq.Header.Del(header)
 	}
 
-	headers, err := rt.signer.Sign(signReq, seeker, "aps", rt.region, time.Now().UTC())
+	if err := rt.signRequest(req, signReq, seeker); err != nil {
+		return nil, err
+	}
+
+	resp, err := rt.next.RoundTrip(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to sign request: %w", err)
+		return nil, err
+	}
+	// Credentials might expire during the request.
+	// To gracefully handle that we force a refresh of the credentials and retry the request.
+	if resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-Amzn-Errortype") == "ExpiredTokenException" {
+		rt.signer.Credentials.Expire()
+		if err := rt.signRequest(req, signReq, seeker); err != nil {
+			return nil, err
+		}
+		return rt.next.RoundTrip(req)
 	}
 
-	// Copy over signed headers. Authorization header is not returned by
-	// rt.signer.Sign and needs to be copied separately.
-	for k, v := range headers {
-		req.Header[textproto.CanonicalMIMEHeaderKey(k)] = v
-	}
-	req.Header.Set("Authorization", signReq.Header.Get("Authorization"))
-
-	return rt.next.RoundTrip(req)
+	return resp, err
 }
