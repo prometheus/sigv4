@@ -14,15 +14,17 @@
 package sigv4
 
 import (
+	"context"
+	"io"
 	"net/http"
 	"os"
 	"strings"
 	"testing"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	signer "github.com/aws/aws-sdk-go/aws/signer/v4"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	signer "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,34 +39,37 @@ func TestSigV4_Inferred_Region(t *testing.T) {
 	os.Setenv("AWS_ACCESS_KEY_ID", "secret")
 	os.Setenv("AWS_SECRET_ACCESS_KEY", "token")
 	os.Setenv("AWS_REGION", "us-west-2")
+	ctx := context.TODO()
+	awscfg, err := config.LoadDefaultConfig(
+		ctx,
+		config.WithRegion(""),
+	)
 
-	sess, err := session.NewSession(&aws.Config{
-		// Setting to an empty string to demostrate the default value from the yaml
-		// won't override the environment's region.
-		Region: aws.String(""),
-	})
 	require.NoError(t, err)
-	_, err = sess.Config.Credentials.Get()
+	_, err = awscfg.Credentials.Retrieve(ctx)
 	require.NoError(t, err)
 
-	require.NotNil(t, sess.Config.Region)
-	require.Equal(t, "us-west-2", *sess.Config.Region)
+	require.NotNil(t, awscfg.Region)
+	require.Equal(t, "us-west-2", awscfg.Region)
 }
 
 func TestSigV4RoundTripper(t *testing.T) {
 	var gotReq *http.Request
 
+	awscfg, _ := config.LoadDefaultConfig(
+		ctx,
+		config.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider("AccessKey", "SecretKey", "token")),
+		config.WithRegion("us-east-2"),
+	)
 	rt := &sigV4RoundTripper{
 		region: "us-east-2",
 		next: RoundTripperFunc(func(req *http.Request) (*http.Response, error) {
 			gotReq = req
 			return &http.Response{StatusCode: http.StatusOK}, nil
 		}),
-		signer: signer.NewSigner(credentials.NewStaticCredentials(
-			"test-id",
-			"secret",
-			"token",
-		)),
+		creds:  aws.NewCredentialsCache(awscfg.Credentials),
+		signer: signer.NewSigner(),
 	}
 	rt.pool.New = rt.newBuf
 
@@ -92,6 +97,10 @@ func TestSigV4RoundTripper(t *testing.T) {
 		_, err = cli.Do(req)
 		require.NoError(t, err)
 		require.NotNil(t, gotReq)
+		// Validate that the transport is able to consume the body
+		data, err := io.ReadAll(gotReq.Body)
+		require.NoError(t, err)
+		require.Equal(t, "Hello, world!", string(data))
 
 		require.Equal(t, origReq.Header.Get("Authorization"), gotReq.Header.Get("Authorization"))
 	})
@@ -104,7 +113,9 @@ func TestSigV4RoundTripper(t *testing.T) {
 		_, err = cli.Do(req)
 		require.NoError(t, err)
 		require.NotNil(t, gotReq)
-
+		// Validate that the transport is able to consume the body
+		_, err = io.ReadAll(gotReq.Body)
+		require.NoError(t, err)
 		require.Equal(t, "/test/test", gotReq.URL.Path)
 	})
 
@@ -112,6 +123,7 @@ func TestSigV4RoundTripper(t *testing.T) {
 		req, err := http.NewRequest(http.MethodGet, "https://example.com/test/test", nil)
 		require.NoError(t, err)
 		_, err = cli.Do(req)
+		require.Nil(t, req.Body)
 		require.NoError(t, err)
 	})
 }
