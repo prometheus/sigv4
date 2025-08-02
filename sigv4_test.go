@@ -120,7 +120,7 @@ func TestSigV4RoundTripper(t *testing.T) {
 	})
 
 	t.Run("No body", func(t *testing.T) {
-		req, err := http.NewRequest(http.MethodGet, "https://example.com/test/test", nil)
+		req, err := http.NewRequest(http.MethodGet, "https://example.com/test/test", nil) //nolint:gocritic //nil body is intentional
 		require.NoError(t, err)
 		_, err = cli.Do(req)
 		require.Nil(t, req.Body)
