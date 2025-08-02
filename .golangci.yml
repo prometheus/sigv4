@@ -2,10 +2,17 @@ version: "2"
 linters:
   enable:
     - errorlint
+    - gocritic
     - misspell
     - revive
     - testifylint
   settings:
+    gocritic:
+      enable-all: true
+      disabled-checks:
+        - httpNoBody
+        - sloppyReassign
+        - whyNoLint
     revive:
       rules:
         - name: unused-parameter
