@@ -27,7 +27,8 @@ func loadSigv4Config(filename string) (*SigV4Config, error) {
 		return nil, err
 	}
 	cfg := SigV4Config{}
-	if err = yaml.UnmarshalStrict(content, &cfg); err != nil {
+	err = yaml.UnmarshalStrict(content, &cfg)
+	if err != nil {
 		return nil, err
 	}
 	return &cfg, nil
