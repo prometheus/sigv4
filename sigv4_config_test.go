@@ -49,12 +49,32 @@ func TestGoodSigV4Configs(t *testing.T) {
 }
 
 func TestBadSigV4Config(t *testing.T) {
-	filename := "testdata/sigv4_bad.yaml"
-	_, err := loadSigv4Config(filename)
-	if err == nil {
-		t.Fatalf("Did not receive expected error unmarshaling bad sigv4 config")
+	tc := []struct {
+		name          string
+		filename      string
+		expectedError string
+	}{
+		{
+			name:          "missing secret key",
+			filename:      "testdata/sigv4_bad.yaml",
+			expectedError: "must provide a AWS SigV4 Access key and Secret Key",
+		},
+		{
+			name:          "external_id without role_arn",
+			filename:      "testdata/sigv4_bad_external_id.yaml",
+			expectedError: "external_id can only be used with role_arn",
+		},
 	}
-	if !strings.Contains(err.Error(), "must provide a AWS SigV4 Access key and Secret Key") {
-		t.Errorf("Received unexpected error from unmarshal of %s: %s", filename, err.Error())
+
+	for _, tt := range tc {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := loadSigv4Config(tt.filename)
+			if err == nil {
+				t.Fatalf("Did not receive expected error unmarshaling bad sigv4 config")
+			}
+			if !strings.Contains(err.Error(), tt.expectedError) {
+				t.Errorf("Received unexpected error from unmarshal of %s: %s", tt.filename, err.Error())
+			}
+		})
 	}
 }
