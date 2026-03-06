@@ -46,7 +46,20 @@ type sigV4RoundTripper struct {
 	signer      *signer.Signer
 }
 
-var ctx context.Context = context.TODO()
+// Option configures [NewSigV4RoundTripper].
+type Option func(*options)
+
+type options struct {
+	ctx context.Context
+}
+
+// WithContext sets the context used during AWS configuration loading
+// and credential retrieval.
+func WithContext(ctx context.Context) Option {
+	return func(o *options) {
+		o.ctx = ctx
+	}
+}
 
 // NewSigV4RoundTripper returns a new http.RoundTripper that will sign requests
 // using Amazon's Signature Verification V4 signing procedure. The request will
@@ -55,7 +68,11 @@ var ctx context.Context = context.TODO()
 //
 // Credentials for signing are retrieved using the the default AWS credential
 // chain. If credentials cannot be found, an error will be returned.
-func NewSigV4RoundTripper(cfg *SigV4Config, next http.RoundTripper) (http.RoundTripper, error) {
+func NewSigV4RoundTripper(cfg *SigV4Config, next http.RoundTripper, opts ...Option) (http.RoundTripper, error) {
+	o := options{ctx: context.Background()}
+	for _, opt := range opts {
+		opt(&o)
+	}
 	if next == nil {
 		next = http.DefaultTransport
 	}
@@ -83,14 +100,14 @@ func NewSigV4RoundTripper(cfg *SigV4Config, next http.RoundTripper) (http.RoundT
 	}
 
 	awscfg, err := config.LoadDefaultConfig(
-		ctx,
+		o.ctx,
 		awsConfig...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("could not create new AWS session: %w", err)
 	}
 
-	if _, err := awscfg.Credentials.Retrieve(ctx); err != nil {
+	if _, err := awscfg.Credentials.Retrieve(o.ctx); err != nil {
 		return nil, fmt.Errorf("could not get SigV4 credentials: %w", err)
 	}
 
@@ -169,13 +186,13 @@ func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	for _, header := range sigv4HeaderDenylist {
 		signReq.Header.Del(header)
 	}
-	creds, err := rt.creds.Retrieve(ctx)
+	creds, err := rt.creds.Retrieve(req.Context())
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving credentials: %w", err)
 	}
 
 	err = rt.signer.SignHTTP(
-		ctx,
+		req.Context(),
 		creds,
 		signReq,
 		strHash,
