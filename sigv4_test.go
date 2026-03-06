@@ -39,25 +39,45 @@ func TestSigV4_Inferred_Region(t *testing.T) {
 	os.Setenv("AWS_ACCESS_KEY_ID", "secret")
 	os.Setenv("AWS_SECRET_ACCESS_KEY", "token")
 	os.Setenv("AWS_REGION", "us-west-2")
-	ctx := context.TODO()
 	awscfg, err := config.LoadDefaultConfig(
-		ctx,
+		t.Context(),
 		config.WithRegion(""),
 	)
 
 	require.NoError(t, err)
-	_, err = awscfg.Credentials.Retrieve(ctx)
+	_, err = awscfg.Credentials.Retrieve(t.Context())
 	require.NoError(t, err)
 
 	require.NotNil(t, awscfg.Region)
 	require.Equal(t, "us-west-2", awscfg.Region)
 }
 
+func TestNewSigV4RoundTripperWithContext(t *testing.T) {
+	cfg := &SigV4Config{
+		Region:    "us-east-1",
+		AccessKey: "access",
+		SecretKey: "secret",
+	}
+
+	t.Run("live context", func(t *testing.T) {
+		rt, err := NewSigV4RoundTripper(cfg, nil, WithContext(t.Context()))
+		require.NoError(t, err)
+		require.NotNil(t, rt)
+	})
+
+	t.Run("cancelled context", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		_, err := NewSigV4RoundTripper(cfg, nil, WithContext(ctx))
+		require.Error(t, err)
+	})
+}
+
 func TestSigV4RoundTripper(t *testing.T) {
 	var gotReq *http.Request
 
 	awscfg, _ := config.LoadDefaultConfig(
-		ctx,
+		t.Context(),
 		config.WithCredentialsProvider(
 			credentials.NewStaticCredentialsProvider("AccessKey", "SecretKey", "token")),
 		config.WithRegion("us-east-2"),
