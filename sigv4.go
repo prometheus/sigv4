@@ -135,7 +135,7 @@ func NewSigV4RoundTripper(cfg *SigV4Config, next http.RoundTripper, opts ...Opti
 	}
 
 	rt := &sigV4RoundTripper{
-		region:      cfg.Region,
+		region:      awscfg.Region,
 		next:        next,
 		creds:       aws.NewCredentialsCache(awscfg.Credentials, credentialCacheOptions),
 		signer:      signer.NewSigner(),

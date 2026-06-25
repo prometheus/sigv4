@@ -62,6 +62,23 @@ func TestSigV4_Inferred_Region(t *testing.T) {
 	require.Equal(t, "us-west-2", awscfg.Region)
 }
 
+func TestNewSigV4RoundTripperInferredRegion(t *testing.T) {
+	// Region is left empty in the config so it must be inferred from the
+	// environment; the resulting transport must sign with the inferred region.
+	t.Setenv("AWS_ACCESS_KEY_ID", "access")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "secret")
+	t.Setenv("AWS_REGION", "us-west-2")
+
+	cfg := &SigV4Config{}
+
+	rt, err := NewSigV4RoundTripper(cfg, nil, WithContext(t.Context()))
+	require.NoError(t, err)
+
+	sigRT, ok := rt.(*sigV4RoundTripper)
+	require.True(t, ok)
+	require.Equal(t, "us-west-2", sigRT.region)
+}
+
 func TestNewSigV4RoundTripperWithContext(t *testing.T) {
 	cfg := &SigV4Config{
 		Region:    "us-east-1",
