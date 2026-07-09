@@ -15,8 +15,10 @@ package sigv4
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -232,3 +234,190 @@ func TestSigV4RoundTripper(t *testing.T) {
 		}
 	})
 }
+
+// stsAssumeResponse is a minimal STS AssumeRole XML response for tests.
+const stsAssumeResponse = `<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <AssumeRoleResult>
+    <Credentials>
+      <AccessKeyId>ASIA_FAKE</AccessKeyId>
+      <SecretAccessKey>FAKE_SECRET</SecretAccessKey>
+      <SessionToken>FAKE_TOKEN</SessionToken>
+      <Expiration>2099-01-01T00:00:00Z</Expiration>
+    </Credentials>
+  </AssumeRoleResult>
+</AssumeRoleResponse>`
+
+// TestAssumeRoleSessionNameAndTags verifies that SessionName and Tags from
+// SigV4Config are threaded through to the STS AssumeRole request body.
+// This mirrors the intent of agentgateway PR #2435: enabling per-caller
+// identity (RoleSessionName) and cost-allocation STS session tags when
+// Prometheus remote-writes through an assumed IAM role.
+func TestAssumeRoleSessionNameAndTags(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "text/xml")
+		_, _ = w.Write([]byte(stsAssumeResponse))
+	}))
+	defer srv.Close()
+
+	cfg := &SigV4Config{
+		Region:      "us-east-1",
+		AccessKey:   "AKIA_FAKE",
+		SecretKey:   "SECRET_FAKE",
+		RoleARN:     "arn:aws:iam::123456789012:role/test-role",
+		SessionName: "prometheus-1",
+		Tags: map[string]string{
+			"team":        "observability",
+			"cost-center": "12345",
+		},
+	}
+
+	// Override STS to hit the mock server.
+	rt, err := NewSigV4RoundTripper(cfg, nil, func(o *options) {
+		o.stsEndpointOverride = srv.URL
+	})
+	require.NoError(t, err)
+
+	// Trigger credential retrieval to force the STS AssumeRole call.
+	creds, err := rt.(*sigV4RoundTripper).creds.Retrieve(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "ASIA_FAKE", creds.AccessKeyID)
+
+	// The mock STS server must have received the AssumeRole body with
+	// the session name and tags.
+	require.Contains(t, gotBody, "RoleSessionName=prometheus-1")
+	require.Contains(t, gotBody, "Tags.member")
+}
+
+// TestAssumeRoleWithExternalIDAndSessionName verifies that ExternalID,
+// SessionName, and Tags all coexist in the AssumeRole request.
+func TestAssumeRoleWithExternalIDAndSessionName(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "text/xml")
+		_, _ = w.Write([]byte(stsAssumeResponse))
+	}))
+	defer srv.Close()
+
+	cfg := &SigV4Config{
+		Region:      "us-east-1",
+		AccessKey:   "AKIA_FAKE",
+		SecretKey:   "SECRET_FAKE",
+		RoleARN:     "arn:aws:iam::123456789012:role/test-role",
+		ExternalID:  "ext-abc-123",
+		SessionName: "prometheus-prod-1",
+		Tags:        map[string]string{"env": "prod"},
+	}
+
+	rt, err := NewSigV4RoundTripper(cfg, nil, func(o *options) {
+		o.stsEndpointOverride = srv.URL
+	})
+	require.NoError(t, err)
+
+	_, err = rt.(*sigV4RoundTripper).creds.Retrieve(t.Context())
+	require.NoError(t, err)
+
+	require.Contains(t, gotBody, "ExternalId=ext-abc-123")
+	require.Contains(t, gotBody, "RoleSessionName=prometheus-prod-1")
+}
+
+// TestValidateSessionNameAndTags exercises the Validate() rules for
+// the new SessionName and Tags fields.
+func TestValidateSessionNameAndTags(t *testing.T) {
+	base := SigV4Config{RoleARN: "arn:aws:iam::123456789012:role/r"}
+
+	tests := []struct {
+		name      string
+		cfg       SigV4Config
+		expectErr string
+	}{
+		{
+			name: "valid session name alphanumeric",
+			cfg:  func() SigV4Config { c := base; c.SessionName = "Prometheus1"; return c }(),
+		},
+		{
+			name: "valid session name special chars",
+			cfg:  func() SigV4Config { c := base; c.SessionName = "user+1@acme.org"; return c }(),
+		},
+		{
+			name: "valid session name min length",
+			cfg:  func() SigV4Config { c := base; c.SessionName = "ab"; return c }(),
+		},
+		{
+			name:      "session_name too short 1 char",
+			cfg:       func() SigV4Config { c := base; c.SessionName = "a"; return c }(),
+			expectErr: "session_name must match",
+		},
+		{
+			name:      "session_name with spaces",
+			cfg:       func() SigV4Config { c := base; c.SessionName = "bad name"; return c }(),
+			expectErr: "session_name must match",
+		},
+		{
+			name:      "session_name with disallowed chars",
+			cfg:       func() SigV4Config { c := base; c.SessionName = "bad!name"; return c }(),
+			expectErr: "session_name must match",
+		},
+		{
+			name:      "session_name too long 65 chars",
+			cfg:       func() SigV4Config { c := base; c.SessionName = strings.Repeat("a", 65); return c }(),
+			expectErr: "session_name must match",
+		},
+		{
+			name: "session_name max length 64 chars",
+			cfg:  func() SigV4Config { c := base; c.SessionName = strings.Repeat("a", 64); return c }(),
+		},
+		{
+			name:      "session_name without role_arn",
+			cfg:       SigV4Config{SessionName: "prometheus-1"},
+			expectErr: "session_name can only be used with role_arn",
+		},
+		{
+			name: "valid tags with role_arn",
+			cfg: func() SigV4Config {
+				c := base
+				c.Tags = map[string]string{"team": "observability"}
+				return c
+			}(),
+		},
+		{
+			name:      "tags without role_arn",
+			cfg:       SigV4Config{Tags: map[string]string{"team": "a"}},
+			expectErr: "tags can only be used with role_arn",
+		},
+		{
+			name: "tag value at max length 256",
+			cfg: func() SigV4Config {
+				c := base
+				c.Tags = map[string]string{"k": strings.Repeat("v", 256)}
+				return c
+			}(),
+		},
+		{
+			name:      "tag value exceeds 256",
+			cfg:       func() SigV4Config { c := base; c.Tags = map[string]string{"k": strings.Repeat("v", 257)}; return c }(),
+			expectErr: "exceeds maximum length of 256",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if tt.expectErr != "" {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.expectErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// ensure json import is used.
+var _ = json.Marshal

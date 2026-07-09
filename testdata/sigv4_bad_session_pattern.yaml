@@ -1,0 +1,5 @@
+region: us-east-2
+access_key: AccessKey
+secret_key: SecretKey
+role_arn: arn:aws:iam::123456789012:role/test-role
+session_name: "bad session name!#$"
