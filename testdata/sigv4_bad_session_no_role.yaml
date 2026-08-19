@@ -1,0 +1,4 @@
+region: us-east-2
+access_key: AccessKey
+secret_key: SecretKey
+session_name: prometheus-1

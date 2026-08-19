@@ -42,7 +42,11 @@ func testGoodConfig(t *testing.T, filename string) {
 }
 
 func TestGoodSigV4Configs(t *testing.T) {
-	filesToTest := []string{"testdata/sigv4_good.yaml", "testdata/sigv4_good.yaml"}
+	filesToTest := []string{
+		"testdata/sigv4_good.yaml",
+		"testdata/sigv4_good.yaml",
+		"testdata/sigv4_good_session.yaml",
+	}
 	for _, filename := range filesToTest {
 		testGoodConfig(t, filename)
 	}
@@ -63,6 +67,26 @@ func TestBadSigV4Config(t *testing.T) {
 			name:          "external_id without role_arn",
 			filename:      "testdata/sigv4_bad_external_id.yaml",
 			expectedError: "external_id can only be used with role_arn",
+		},
+		{
+			name:          "session_name too short",
+			filename:      "testdata/sigv4_bad_session_too_short.yaml",
+			expectedError: "session_name must match",
+		},
+		{
+			name:          "session_name invalid characters",
+			filename:      "testdata/sigv4_bad_session_pattern.yaml",
+			expectedError: "session_name must match",
+		},
+		{
+			name:          "session_name without role_arn",
+			filename:      "testdata/sigv4_bad_session_no_role.yaml",
+			expectedError: "session_name can only be used with role_arn",
+		},
+		{
+			name:          "tags without role_arn",
+			filename:      "testdata/sigv4_bad_tags_no_role.yaml",
+			expectedError: "tags can only be used with role_arn",
 		},
 	}
 
