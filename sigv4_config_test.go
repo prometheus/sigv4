@@ -42,7 +42,7 @@ func testGoodConfig(t *testing.T, filename string) {
 }
 
 func TestGoodSigV4Configs(t *testing.T) {
-	filesToTest := []string{"testdata/sigv4_good.yaml", "testdata/sigv4_good.yaml"}
+	filesToTest := []string{"testdata/sigv4_good.yaml", "testdata/sigv4_good_empty_keys.yaml"}
 	for _, filename := range filesToTest {
 		testGoodConfig(t, filename)
 	}
