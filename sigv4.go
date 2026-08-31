@@ -32,6 +32,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 )
 
 var sigv4HeaderDenylist = []string{
@@ -51,7 +52,8 @@ type sigV4RoundTripper struct {
 type Option func(*options)
 
 type options struct {
-	ctx context.Context
+	ctx                 context.Context
+	stsEndpointOverride string // for testing: override STS endpoint URL
 }
 
 // WithContext sets the context used during AWS configuration loading
@@ -117,12 +119,31 @@ func NewSigV4RoundTripper(cfg *SigV4Config, next http.RoundTripper, opts ...Opti
 	}
 
 	if cfg.RoleARN != "" {
+		stsOpts := []func(*sts.Options){}
+		if o.stsEndpointOverride != "" {
+			overrideURL := o.stsEndpointOverride
+			stsOpts = append(stsOpts, func(so *sts.Options) {
+				so.BaseEndpoint = aws.String(overrideURL)
+			})
+		}
 		awscfg.Credentials = stscreds.NewAssumeRoleProvider(
-			sts.NewFromConfig(awscfg),
+			sts.NewFromConfig(awscfg, stsOpts...),
 			cfg.RoleARN,
-			func(o *stscreds.AssumeRoleOptions) {
+			func(ao *stscreds.AssumeRoleOptions) {
 				if cfg.ExternalID != "" {
-					o.ExternalID = aws.String(cfg.ExternalID)
+					ao.ExternalID = aws.String(cfg.ExternalID)
+				}
+				if cfg.SessionName != "" {
+					ao.RoleSessionName = cfg.SessionName
+				}
+				if len(cfg.Tags) > 0 {
+					ao.Tags = make([]ststypes.Tag, 0, len(cfg.Tags))
+					for k, v := range cfg.Tags {
+						ao.Tags = append(ao.Tags, ststypes.Tag{
+							Key:   aws.String(k),
+							Value: aws.String(v),
+						})
+					}
 				}
 			},
 		)

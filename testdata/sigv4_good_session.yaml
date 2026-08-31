@@ -1,0 +1,8 @@
+region: us-east-2
+access_key: AccessKey
+secret_key: SecretKey
+role_arn: arn:aws:iam::123456789012:role/test-role
+session_name: prometheus-instance-1
+tags:
+  team: observability
+  cost-center: "12345"
