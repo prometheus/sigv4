@@ -14,13 +14,16 @@
 package sigv4
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -46,6 +49,91 @@ type idBody struct {
 }
 
 func (idBody) Close() error { return nil }
+
+type blockingBodyWriter struct {
+	started chan struct{}
+	resume  chan struct{}
+	data    string
+}
+
+func (w *blockingBodyWriter) Write(p []byte) (int, error) {
+	close(w.started)
+	<-w.resume
+	w.data = string(p)
+	return len(p), nil
+}
+
+func TestSigV4RoundTripperConcurrentBodyClose(t *testing.T) {
+	// Keep pool operations on one processor so the second request can reuse
+	// the first request's buffer while its downstream write is still blocked.
+	previousProcs := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(previousProcs)
+
+	w := &blockingBodyWriter{started: make(chan struct{}), resume: make(chan struct{})}
+	resume := sync.OnceFunc(func() { close(w.resume) })
+	defer resume()
+	done := make(chan struct{})
+	var firstBody io.ReadCloser
+	rt, err := NewSigV4RoundTripper(&SigV4Config{
+		Region:    "us-east-1",
+		AccessKey: "access",
+		SecretKey: "secret",
+	}, RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if firstBody == nil {
+			firstBody = r.Body
+			go func() {
+				defer close(done)
+				// Closing the body may interrupt the copy after the write.
+				_, _ = io.Copy(w, r.Body)
+			}()
+			<-w.started
+		} else {
+			_, err := io.Copy(io.Discard, r.Body)
+			require.NoError(t, err)
+			require.NoError(t, r.Body.Close())
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+	}))
+	require.NoError(t, err)
+
+	r, err := http.NewRequest(http.MethodPost, "https://example.com", strings.NewReader("original"))
+	require.NoError(t, err)
+	_, err = rt.RoundTrip(r)
+	require.NoError(t, err)
+	// Close must return even though the downstream write is still blocked.
+	require.NoError(t, firstBody.Close())
+
+	r, err = http.NewRequest(http.MethodPost, "https://example.com", strings.NewReader("replaced"))
+	require.NoError(t, err)
+	_, err = rt.RoundTrip(r)
+	require.NoError(t, err)
+	resume()
+	<-done
+	require.Equal(t, "original", w.data)
+}
+
+func TestPooledBodyClose(t *testing.T) {
+	buf := bytes.NewBufferString("original")
+	body := &pooledBody{
+		reader: bytes.NewReader(buf.Bytes()),
+		buf:    buf,
+		pool:   &sync.Pool{},
+	}
+	data, err := io.ReadAll(body)
+	require.NoError(t, err)
+	require.Equal(t, "original", string(data))
+	require.NoError(t, body.Close())
+
+	// Once closed, the buffer may be reused. Further reads and closes must
+	// neither expose nor reset the new contents.
+	_, err = buf.WriteString("replaced")
+	require.NoError(t, err)
+	require.NoError(t, body.Close())
+	n, err := body.Read(make([]byte, 8))
+	require.Zero(t, n)
+	require.ErrorIs(t, err, io.ErrClosedPipe)
+	require.Equal(t, "replaced", buf.String())
+}
 
 func TestSigV4_Inferred_Region(t *testing.T) {
 	os.Setenv("AWS_ACCESS_KEY_ID", "secret")
