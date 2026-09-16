@@ -175,17 +175,33 @@ func (rt *sigV4RoundTripper) newBuf() any {
 // RoundTrip returns, so the buffer is only reset and returned to the pool once
 // Close is called, never while RoundTrip's defer runs.
 type pooledBody struct {
-	*bytes.Reader
-	buf  *bytes.Buffer
-	pool *sync.Pool
-	once sync.Once
+	mu     sync.Mutex
+	reader *bytes.Reader
+	buf    *bytes.Buffer
+	pool   *sync.Pool
+}
+
+// Read copies the data before Close can recycle the buffer. Keep reader private
+// so io.Copy cannot use bytes.Reader.WriteTo to expose the pooled bytes to a
+// writer that may still be using them after Close returns.
+func (b *pooledBody) Read(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.buf == nil {
+		return 0, io.ErrClosedPipe
+	}
+	return b.reader.Read(p)
 }
 
 func (b *pooledBody) Close() error {
-	b.once.Do(func() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.buf != nil {
 		b.buf.Reset()
 		b.pool.Put(b.buf)
-	})
+		b.buf = nil
+		b.reader = nil
+	}
 	return nil
 }
 
@@ -251,7 +267,7 @@ func (rt *sigV4RoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		// recycles it on Close, so it stays valid for as long as the downstream
 		// RoundTripper reads it.
 		signReq.Body = &pooledBody{
-			Reader: bytes.NewReader(buf.Bytes()),
+			reader: bytes.NewReader(buf.Bytes()),
 			buf:    buf,
 			pool:   &rt.pool,
 		}
