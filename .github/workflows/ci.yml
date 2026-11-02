@@ -16,8 +16,8 @@ jobs:
     strategy:
       matrix:
         include:
-          - go_version: '1.25.x'
           - go_version: '1.26.x'
+          - go_version: '1.27.x'
             latest: true
     steps:
       - name: Checkout repository
@@ -28,6 +28,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go_version }}
-      - run: make test
+      - run: make test SKIP_GOLANGCI_LINT=1
       - run: make style
         if: matrix.latest
+      - run: git diff --exit-code
